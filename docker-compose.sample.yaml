@@ -1,0 +1,119 @@
+# Même structure pour chaque projet :
+#   - nginx « dev »  -> PHP dev                (httpdocs/dev)
+#   - nginx « prod » -> PHP beta et PHP prod   (httpdocs/beta, httpdocs/prod), même conf nginx pour les deux
+#   - un conteneur PHP par code (dev, beta, prod) + 1 serveur de bases de données
+# Traefik et phpMyAdmin sont partagés entre les projets : voir ~/traefik.
+# Les noms de services / conteneurs / réseaux sont préfixés « projet- » car ils sont globaux à Docker.
+services:
+  ## PROD : un nginx pour beta + prod (nginx/prod.conf), un PHP par code
+  # joint par Traefik sous le nom « projet-prod-nginx » (~/traefik/traefik.yaml)
+  projet-prod-nginx:
+    image: nginx:1.27-alpine
+    container_name: projet-prod-nginx
+    restart: unless-stopped
+    volumes:
+      - ./httpdocs/beta:/var/www/beta:ro
+#      - ./httpdocs/prod:/var/www/prod:ro
+      - ./nginx/prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+    depends_on:
+      - projet-beta-php
+#      - projet-prod-php
+    networks:
+      - proxy
+      - prod
+
+  projet-beta-php:
+    #image: php:8.3-fpm-alpine
+    image: myphp:8.4
+    build:
+      context: ./php/8.4
+      dockerfile: Dockerfile
+    container_name: projet-beta-php
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./httpdocs/beta:/var/www/html
+    networks:
+      - prod
+      - database
+
+  # PROD pas encore déployé : décommenter ici, dans projet-prod-nginx (volume + depends_on)
+  # et dans nginx/prod.conf, une fois le code présent dans httpdocs/prod.
+#  projet-prod-php:
+#    image: myphp:8.4
+#    container_name: projet-prod-php
+#    restart: unless-stopped
+#    working_dir: /var/www/html
+#    volumes:
+#      - ./httpdocs/prod:/var/www/html
+#    networks:
+#      - prod
+#      - database
+
+  ## DEV
+  projet-dev-php:
+    #image: php:8.3-fpm-alpine
+    image: myphp:8.4
+    build:
+      context: ./php/8.4
+      dockerfile: Dockerfile
+    container_name: projet-dev-php
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./httpdocs/dev:/var/www/html
+    networks:
+      - dev
+      - database
+
+  # joint par Traefik sous le nom « projet-dev-nginx » (~/traefik/traefik.yaml)
+  projet-dev-nginx:
+    image: nginx:1.27-alpine
+    container_name: projet-dev-nginx
+    restart: unless-stopped
+    volumes:
+      - ./httpdocs/dev:/var/www/html:ro
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - projet-dev-php
+    networks:
+      - proxy
+      - dev
+
+  ## BASES DE DONNÉES
+  # joint par le phpMyAdmin partagé sous le nom « projet-databases » (PMA_HOSTS dans ~/traefik/compose.yaml)
+  projet-databases:
+    image: mariadb:11.4
+    container_name: projet-databases
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+#      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+    volumes:
+      - ./data:/var/lib/mysql
+    networks:
+      database:
+        # nom historique utilisé par l'application (DATABASE_URL ...@mariadb:3306 dans httpdocs/*/.env.local) ;
+        # visible uniquement sur le réseau privé du projet
+        aliases:
+          - mariadb
+      pma:
+
+networks:
+  # réseaux partagés avec ~/traefik (Traefik + phpMyAdmin), gérés hors de ce projet
+  proxy:
+    name: proxy
+    external: true
+  pma:
+    name: pma
+    external: true
+  # réseaux privés du projet
+  prod:
+    name: projet-prod
+  dev:
+    name: projet-dev
+  database:
+    name: projet-databases
